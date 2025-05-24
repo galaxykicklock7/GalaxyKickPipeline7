@@ -49,6 +49,13 @@ jobs:
       - name: Install lt
         run: npm install -g localtunnel
         
-      - name: Start lt
+      - name: Start lt with fallback host
         run: |
-          npx localtunnel --port $PORT --subdomain $LOWERCASE_USERNAME
+          for i in {1..5}; do
+            echo "Attempt $i to start LocalTunnel..."
+            if npx localtunnel --host https://localtunnel.me --port $PORT --subdomain $LOWERCASE_USERNAME; then
+              break
+            fi
+            echo "Failed. Retrying in 5 seconds..."
+            sleep 5
+          done
