@@ -9,7 +9,7 @@ on:
 
 jobs:
   expose:
-    name: Run ${{ inputs.username }}
+    name: Run for ${{ inputs.username }}
     runs-on: ubuntu-latest
     timeout-minutes: 60 
     env:
