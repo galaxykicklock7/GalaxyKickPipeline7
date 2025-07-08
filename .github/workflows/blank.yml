@@ -15,7 +15,7 @@ jobs:
     env:
       PORT: 7860
       IMAGE_NAME: bharanidharan/galaxykick
-      IMAGE_TAG: v203
+      IMAGE_TAG: v204
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
