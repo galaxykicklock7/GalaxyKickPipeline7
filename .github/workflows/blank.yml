@@ -49,13 +49,66 @@ jobs:
       - name: Install lt
         run: npm install -g localtunnel
         
-      - name: Start lt with fallback host
+      - name: Configure network and firewall settings
         run: |
+          # Allow outbound connections on common tunnel ports
+          sudo iptables -A OUTPUT -p tcp --dport 80 -j ACCEPT
+          sudo iptables -A OUTPUT -p tcp --dport 443 -j ACCEPT
+          sudo iptables -A OUTPUT -p tcp --dport 7153 -j ACCEPT
+          sudo iptables -A OUTPUT -p tcp --dport 8080 -j ACCEPT
+          
+          # Set up DNS to use public resolvers
+          echo "nameserver 8.8.8.8" | sudo tee /etc/resolv.conf
+          echo "nameserver 1.1.1.1" | sudo tee -a /etc/resolv.conf
+          
+          # Test connectivity to loca.lt
+          echo "Testing connectivity to loca.lt..."
+          curl -I https://loca.lt || echo "Direct connection failed"
+          
+      - name: Start loca.lt tunnel with firewall handling
+        run: |
+          # Wait for Docker container to be ready
+          echo "Waiting for Docker container to be ready..."
+          sleep 10
+          
+          # Check if port is accessible
+          if ! curl -f http://localhost:$PORT/health 2>/dev/null; then
+            echo "Warning: Service may not be ready on port $PORT"
+          fi
+          
+          # Try loca.lt with firewall bypass methods
           for i in {1..5}; do
-            echo "Attempt $i to start LocalTunnel..."
-            if npx localtunnel --host https://localtunnel.me --port $PORT --subdomain $LOWERCASE_USERNAME; then
-              break
+            echo "Attempt $i to start loca.lt tunnel..."
+            
+            # Method 1: Direct connection with subdomain
+            HTTP_PROXY= HTTPS_PROXY= timeout 45s npx localtunnel --port $PORT --subdomain $LOWERCASE_USERNAME --host https://loca.lt && {
+              echo "Successfully connected to loca.lt with subdomain"
+              exit 0
+            } || {
+              echo "Method 1 failed on attempt $i"
+            }
+            
+            # Method 2: Try with different host format
+            HTTP_PROXY= HTTPS_PROXY= timeout 45s npx localtunnel --port $PORT --subdomain $LOWERCASE_USERNAME --host loca.lt && {
+              echo "Successfully connected with alternative host format"
+              exit 0
+            } || {
+              echo "Method 2 failed on attempt $i"
+            }
+            
+            # Method 3: Without subdomain
+            HTTP_PROXY= HTTPS_PROXY= timeout 45s npx localtunnel --port $PORT --host https://loca.lt && {
+              echo "Successfully connected without subdomain"
+              exit 0
+            } || {
+              echo "Method 3 failed on attempt $i"
+            }
+            
+            if [ $i -lt 5 ]; then
+              echo "Waiting 15 seconds before retry..."
+              sleep 15
             fi
-            echo "Failed. Retrying in 5 seconds..."
-            sleep 5
           done
+          
+          echo "All loca.lt tunnel attempts failed"
+          exit 1
