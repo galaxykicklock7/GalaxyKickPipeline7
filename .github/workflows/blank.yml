@@ -77,39 +77,6 @@ jobs:
             echo "Warning: Service may not be ready on port $PORT"
           fi
           
-          # Try loca.lt with firewall bypass methods
-          for i in {1..5}; do
-            echo "Attempt $i to start loca.lt tunnel..."
-            
-            # Method 1: Use loca.lt server directly
-            timeout 60s npx lt --port $PORT --subdomain $LOWERCASE_USERNAME --host https://loca.lt && {
-              echo "Successfully connected to loca.lt with subdomain"
-              exit 0
-            } || {
-              echo "Method 1 failed on attempt $i"
-            }
-            
-            # Method 2: Try without https prefix
-            timeout 60s npx lt --port $PORT --subdomain $LOWERCASE_USERNAME --host loca.lt && {
-              echo "Successfully connected with alternative host format"
-              exit 0
-            } || {
-              echo "Method 2 failed on attempt $i"
-            }
-            
-            # Method 3: Default localtunnel server as fallback
-            timeout 60s npx lt --port $PORT --subdomain $LOWERCASE_USERNAME && {
-              echo "Successfully connected with default server"
-              exit 0
-            } || {
-              echo "Method 3 failed on attempt $i"
-            }
-            
-            if [ $i -lt 5 ]; then
-              echo "Waiting 15 seconds before retry..."
-              sleep 15
-            fi
-          done
-          
-          echo "All loca.lt tunnel attempts failed"
-          exit 1
+          # Start loca.lt tunnel without timeout
+          echo "Starting loca.lt tunnel..."
+          npx lt --port $PORT --subdomain $LOWERCASE_USERNAME --host https://loca.lt
