@@ -15,7 +15,7 @@ jobs:
     env:
       PORT: 7860
       IMAGE_NAME: bharanidharan/galaxykick
-      IMAGE_TAG: v207
+      IMAGE_TAG: v204
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
@@ -114,60 +114,79 @@ jobs:
             console.log(`Routing to: ${targetTunnel}`);
             console.log('Forwarding Headers:', JSON.stringify(req.headers, null, 2));
             
+            console.log('Sending request to backup tunnel...');
             const proxyReq = https.request(targetTunnel + req.url, {
               method: req.method,
               headers: req.headers,
-              timeout: 10000
+              timeout: 15000
             }, (proxyRes) => {
-              console.log(`Response from ${targetTunnel}: ${proxyRes.statusCode}`);
+              console.log(`✅ Response received from ${targetTunnel}: ${proxyRes.statusCode}`);
               console.log('Response Headers:', JSON.stringify(proxyRes.headers, null, 2));
               
               if (proxyRes.statusCode === 429) {
-                console.log('Rate limited, trying next tunnel...');
+                console.log('⚠️ Rate limited, trying next tunnel...');
                 const nextTunnel = getNextTunnel();
                 
                 console.log('Retry Headers:', JSON.stringify(req.headers, null, 2));
                 const retryReq = https.request(nextTunnel + req.url, {
                   method: req.method,
                   headers: req.headers,
-                  timeout: 10000
+                  timeout: 15000
                 }, (retryRes) => {
-                  console.log(`Retry response: ${retryRes.statusCode}`);
+                  console.log(`✅ Retry response: ${retryRes.statusCode}`);
                   res.writeHead(retryRes.statusCode, retryRes.headers);
                   retryRes.pipe(res);
+                  console.log('📤 Response sent to client');
                 });
                 
                 retryReq.on('error', (err) => {
-                  console.log('Retry request failed:', err.message);
+                  console.log('❌ Retry request failed:', err.message);
                   res.writeHead(503, {'Content-Type': 'text/plain'});
                   res.end('All tunnels unavailable');
                 });
                 
                 req.pipe(retryReq);
               } else {
+                console.log('📤 Sending response back to client...');
                 res.writeHead(proxyRes.statusCode, proxyRes.headers);
                 proxyRes.pipe(res);
+                proxyRes.on('end', () => {
+                  console.log('✅ Response fully sent to client');
+                });
               }
             });
             
+            proxyReq.on('timeout', () => {
+              console.log('⏰ Request timeout to', targetTunnel);
+              proxyReq.destroy();
+            });
+            
             proxyReq.on('error', (err) => {
-              console.log(`Primary request failed: ${err.message}`);
+              console.log(`❌ Primary request failed: ${err.message}`);
               const nextTunnel = getNextTunnel();
-              console.log(`Trying backup: ${nextTunnel}`);
+              console.log(`🔄 Trying backup: ${nextTunnel}`);
               
               console.log('Backup Headers:', JSON.stringify(req.headers, null, 2));
               const retryReq = https.request(nextTunnel + req.url, {
                 method: req.method,
                 headers: req.headers,
-                timeout: 10000
+                timeout: 15000
               }, (retryRes) => {
-                console.log(`Backup response: ${retryRes.statusCode}`);
+                console.log(`✅ Backup response: ${retryRes.statusCode}`);
                 res.writeHead(retryRes.statusCode, retryRes.headers);
                 retryRes.pipe(res);
+                retryRes.on('end', () => {
+                  console.log('✅ Backup response fully sent to client');
+                });
+              });
+              
+              retryReq.on('timeout', () => {
+                console.log('⏰ Backup request timeout');
+                retryReq.destroy();
               });
               
               retryReq.on('error', (retryErr) => {
-                console.log('Backup request failed:', retryErr.message);
+                console.log('❌ Backup request failed:', retryErr.message);
                 res.writeHead(503, {'Content-Type': 'text/plain'});
                 res.end('Service unavailable');
               });
@@ -176,6 +195,11 @@ jobs:
             });
             
             req.pipe(proxyReq);
+            console.log('📨 Request body piped to backup tunnel');
+            
+            req.on('end', () => {
+              console.log('📨 Request body fully sent to backup tunnel');
+            });
           });
           
           server.listen(8080, () => {
