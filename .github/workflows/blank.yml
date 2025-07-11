@@ -66,170 +66,31 @@ jobs:
           nc -zv loca.lt 80 2>&1 || echo "Port 80 test failed"
           nc -zv loca.lt 443 2>&1 || echo "Port 443 test failed"
           
-      - name: Start smart load balancer on main tunnel
+      - name: Start tunnels with backup support
         run: |
           # Wait for Docker container
           echo "Waiting for Docker container..."
           sleep 15
           
-          # Start backup tunnels first
+          # Start main tunnel
+          echo "Starting main tunnel..."
+          lt --port $PORT --subdomain $LOWERCASE_USERNAME &
+          
+          # Start backup tunnels
           echo "Starting backup tunnels..."
-          lt --port $PORT --subdomain ${LOWERCASE_USERNAME}-b1 &
-          lt --port $PORT --subdomain ${LOWERCASE_USERNAME}-b2 &
+          lt --port $PORT --subdomain ${LOWERCASE_USERNAME}2 &
+          lt --port $PORT --subdomain ${LOWERCASE_USERNAME}3 &
           
-          sleep 10
-          
-          # Wait for backup tunnels to be ready
-          echo "Waiting for backup tunnels to be ready..."
-          sleep 20
-          
-          # Test backup tunnels
-          echo "Testing backup tunnel connectivity..."
-          curl -f https://${LOWERCASE_USERNAME}-b1.loca.lt --max-time 10 || echo "B1 not ready"
-          curl -f https://${LOWERCASE_USERNAME}-b2.loca.lt --max-time 10 || echo "B2 not ready"
-          
-          # Create simple proxy with debugging
-          cat > proxy_lb.js << 'EOF'
-          const http = require('http');
-          const https = require('https');
-          
-          const backupTunnels = [
-            `https://${process.env.USERNAME}-b1.loca.lt`,
-            `https://${process.env.USERNAME}-b2.loca.lt`
-          ];
-          
-          let currentTunnel = 0;
-          
-          function getNextTunnel() {
-            const tunnel = backupTunnels[currentTunnel];
-            currentTunnel = (currentTunnel + 1) % backupTunnels.length;
-            return tunnel;
-          }
-          
-          const server = http.createServer((req, res) => {
-            console.log(`[${new Date().toISOString()}] Request: ${req.method} ${req.url}`);
-            console.log('Incoming Headers:', JSON.stringify(req.headers, null, 2));
-            
-            const targetTunnel = getNextTunnel();
-            console.log(`Routing to: ${targetTunnel}`);
-            console.log('Forwarding Headers:', JSON.stringify(req.headers, null, 2));
-            
-            console.log('Sending request to backup tunnel...');
-            const proxyReq = https.request(targetTunnel + req.url, {
-              method: req.method,
-              headers: req.headers,
-              timeout: 15000
-            }, (proxyRes) => {
-              console.log(`✅ Response received from ${targetTunnel}: ${proxyRes.statusCode}`);
-              console.log('Response Headers:', JSON.stringify(proxyRes.headers, null, 2));
-              
-              if (proxyRes.statusCode === 429) {
-                console.log('⚠️ Rate limited, trying next tunnel...');
-                const nextTunnel = getNextTunnel();
-                
-                console.log('Retry Headers:', JSON.stringify(req.headers, null, 2));
-                const retryReq = https.request(nextTunnel + req.url, {
-                  method: req.method,
-                  headers: req.headers,
-                  timeout: 15000
-                }, (retryRes) => {
-                  console.log(`✅ Retry response: ${retryRes.statusCode}`);
-                  res.writeHead(retryRes.statusCode, retryRes.headers);
-                  retryRes.pipe(res);
-                  console.log('📤 Response sent to client');
-                });
-                
-                retryReq.on('error', (err) => {
-                  console.log('❌ Retry request failed:', err.message);
-                  res.writeHead(503, {'Content-Type': 'text/plain'});
-                  res.end('All tunnels unavailable');
-                });
-                
-                req.pipe(retryReq);
-              } else {
-                console.log('📤 Sending response back to client...');
-                res.writeHead(proxyRes.statusCode, proxyRes.headers);
-                proxyRes.pipe(res);
-                proxyRes.on('end', () => {
-                  console.log('✅ Response fully sent to client');
-                });
-              }
-            });
-            
-            proxyReq.on('timeout', () => {
-              console.log('⏰ Request timeout to', targetTunnel);
-              proxyReq.destroy();
-            });
-            
-            proxyReq.on('error', (err) => {
-              console.log(`❌ Primary request failed: ${err.message}`);
-              const nextTunnel = getNextTunnel();
-              console.log(`🔄 Trying backup: ${nextTunnel}`);
-              
-              console.log('Backup Headers:', JSON.stringify(req.headers, null, 2));
-              const retryReq = https.request(nextTunnel + req.url, {
-                method: req.method,
-                headers: req.headers,
-                timeout: 15000
-              }, (retryRes) => {
-                console.log(`✅ Backup response: ${retryRes.statusCode}`);
-                res.writeHead(retryRes.statusCode, retryRes.headers);
-                retryRes.pipe(res);
-                retryRes.on('end', () => {
-                  console.log('✅ Backup response fully sent to client');
-                });
-              });
-              
-              retryReq.on('timeout', () => {
-                console.log('⏰ Backup request timeout');
-                retryReq.destroy();
-              });
-              
-              retryReq.on('error', (retryErr) => {
-                console.log('❌ Backup request failed:', retryErr.message);
-                res.writeHead(503, {'Content-Type': 'text/plain'});
-                res.end('Service unavailable');
-              });
-              
-              req.pipe(retryReq);
-            });
-            
-            req.pipe(proxyReq);
-            console.log('📨 Request body piped to backup tunnel');
-            
-            req.on('end', () => {
-              console.log('📨 Request body fully sent to backup tunnel');
-            });
-          });
-          
-          server.listen(8080, () => {
-            console.log('Tunnel proxy running on port 8080');
-            console.log('Backup tunnels:', backupTunnels);
-          });
-          EOF
-          
-          # Set environment
-          export USERNAME="$LOWERCASE_USERNAME"
-          export PORT="$PORT"
-          
-          # Start proxy load balancer
-          node proxy_lb.js &
-          
-          # Start main tunnel pointing to proxy
-          lt --port 8080 --subdomain $LOWERCASE_USERNAME &
+          sleep 15
           
           echo "Setup complete:"
-          echo "Port Configuration:"
-          echo "  - Docker Service: localhost:$PORT (7860)"
-          echo "  - Proxy Load Balancer: localhost:8080"
+          echo "Main URL: https://$LOWERCASE_USERNAME.loca.lt"
+          echo "Backup URLs (for backend failover):"
+          echo "  - https://${LOWERCASE_USERNAME}2.loca.lt"
+          echo "  - https://${LOWERCASE_USERNAME}3.loca.lt"
           echo ""
-          echo "Tunnel Configuration:"
-          echo "  - Main URL: https://$LOWERCASE_USERNAME.loca.lt → localhost:8080 (proxy)"
-          echo "  - Backup B1: https://${LOWERCASE_USERNAME}-b1.loca.lt → localhost:$PORT (direct)"
-          echo "  - Backup B2: https://${LOWERCASE_USERNAME}-b2.loca.lt → localhost:$PORT (direct)"
-          echo ""
-          echo "Traffic Flow:"
-          echo "  User → Main URL → Proxy (8080) → Backup Tunnels → Docker (7860)"
+          echo "All tunnels point to Docker service on port $PORT"
+          echo "Backend will handle failover automatically"
           
 
           
