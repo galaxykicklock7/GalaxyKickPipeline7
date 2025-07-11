@@ -79,7 +79,16 @@ jobs:
           
           sleep 10
           
-          # Create simple proxy that only routes between backup tunnels
+          # Wait for backup tunnels to be ready
+          echo "Waiting for backup tunnels to be ready..."
+          sleep 20
+          
+          # Test backup tunnels
+          echo "Testing backup tunnel connectivity..."
+          curl -f https://${LOWERCASE_USERNAME}-b1.loca.lt --max-time 10 || echo "B1 not ready"
+          curl -f https://${LOWERCASE_USERNAME}-b2.loca.lt --max-time 10 || echo "B2 not ready"
+          
+          # Create simple proxy with debugging
           cat > proxy_lb.js << 'EOF'
           const http = require('http');
           const https = require('https');
@@ -90,44 +99,46 @@ jobs:
           ];
           
           let currentTunnel = 0;
-          const rateLimited = new Set();
           
           function getNextTunnel() {
-            let attempts = 0;
-            while (attempts < backupTunnels.length) {
-              const tunnel = backupTunnels[currentTunnel];
-              currentTunnel = (currentTunnel + 1) % backupTunnels.length;
-              
-              if (!rateLimited.has(tunnel)) {
-                return tunnel;
-              }
-              attempts++;
-            }
-            rateLimited.clear();
-            return backupTunnels[0];
+            const tunnel = backupTunnels[currentTunnel];
+            currentTunnel = (currentTunnel + 1) % backupTunnels.length;
+            return tunnel;
           }
           
           const server = http.createServer((req, res) => {
+            console.log(`[${new Date().toISOString()}] Request: ${req.method} ${req.url}`);
+            console.log('Incoming Headers:', JSON.stringify(req.headers, null, 2));
+            
             const targetTunnel = getNextTunnel();
+            console.log(`Routing to: ${targetTunnel}`);
+            console.log('Forwarding Headers:', JSON.stringify(req.headers, null, 2));
             
             const proxyReq = https.request(targetTunnel + req.url, {
               method: req.method,
               headers: req.headers,
-              timeout: 8000
+              timeout: 10000
             }, (proxyRes) => {
+              console.log(`Response from ${targetTunnel}: ${proxyRes.statusCode}`);
+              console.log('Response Headers:', JSON.stringify(proxyRes.headers, null, 2));
+              
               if (proxyRes.statusCode === 429) {
-                rateLimited.add(targetTunnel);
+                console.log('Rate limited, trying next tunnel...');
                 const nextTunnel = getNextTunnel();
                 
+                console.log('Retry Headers:', JSON.stringify(req.headers, null, 2));
                 const retryReq = https.request(nextTunnel + req.url, {
                   method: req.method,
-                  headers: req.headers
+                  headers: req.headers,
+                  timeout: 10000
                 }, (retryRes) => {
+                  console.log(`Retry response: ${retryRes.statusCode}`);
                   res.writeHead(retryRes.statusCode, retryRes.headers);
                   retryRes.pipe(res);
                 });
                 
-                retryReq.on('error', () => {
+                retryReq.on('error', (err) => {
+                  console.log('Retry request failed:', err.message);
                   res.writeHead(503, {'Content-Type': 'text/plain'});
                   res.end('All tunnels unavailable');
                 });
@@ -139,17 +150,24 @@ jobs:
               }
             });
             
-            proxyReq.on('error', () => {
+            proxyReq.on('error', (err) => {
+              console.log(`Primary request failed: ${err.message}`);
               const nextTunnel = getNextTunnel();
+              console.log(`Trying backup: ${nextTunnel}`);
+              
+              console.log('Backup Headers:', JSON.stringify(req.headers, null, 2));
               const retryReq = https.request(nextTunnel + req.url, {
                 method: req.method,
-                headers: req.headers
+                headers: req.headers,
+                timeout: 10000
               }, (retryRes) => {
+                console.log(`Backup response: ${retryRes.statusCode}`);
                 res.writeHead(retryRes.statusCode, retryRes.headers);
                 retryRes.pipe(res);
               });
               
-              retryReq.on('error', () => {
+              retryReq.on('error', (retryErr) => {
+                console.log('Backup request failed:', retryErr.message);
                 res.writeHead(503, {'Content-Type': 'text/plain'});
                 res.end('Service unavailable');
               });
@@ -162,6 +180,7 @@ jobs:
           
           server.listen(8080, () => {
             console.log('Tunnel proxy running on port 8080');
+            console.log('Backup tunnels:', backupTunnels);
           });
           EOF
           
@@ -176,10 +195,17 @@ jobs:
           lt --port 8080 --subdomain $LOWERCASE_USERNAME &
           
           echo "Setup complete:"
-          echo "Main URL: https://$LOWERCASE_USERNAME.loca.lt (with automatic failover)"
-          echo "Backup tunnels (internal use):"
-          echo "  - https://${LOWERCASE_USERNAME}-b1.loca.lt"
-          echo "  - https://${LOWERCASE_USERNAME}-b2.loca.lt"
+          echo "Port Configuration:"
+          echo "  - Docker Service: localhost:$PORT (7860)"
+          echo "  - Proxy Load Balancer: localhost:8080"
+          echo ""
+          echo "Tunnel Configuration:"
+          echo "  - Main URL: https://$LOWERCASE_USERNAME.loca.lt → localhost:8080 (proxy)"
+          echo "  - Backup B1: https://${LOWERCASE_USERNAME}-b1.loca.lt → localhost:$PORT (direct)"
+          echo "  - Backup B2: https://${LOWERCASE_USERNAME}-b2.loca.lt → localhost:$PORT (direct)"
+          echo ""
+          echo "Traffic Flow:"
+          echo "  User → Main URL → Proxy (8080) → Backup Tunnels → Docker (7860)"
           
 
           
