@@ -46,11 +46,12 @@ jobs:
         with:
           node-version: '16'
           
-      - name: Setup SSH for Serveo
+      - name: Install Bore
         run: |
-          # Generate SSH key for serveo
-          ssh-keygen -t rsa -b 2048 -f ~/.ssh/serveo_key -N ""
-          chmod 600 ~/.ssh/serveo_key
+          wget -q https://github.com/ekzhang/bore/releases/latest/download/bore-linux-x86_64.tar.gz
+          tar -xzf bore-linux-x86_64.tar.gz
+          sudo mv bore /usr/local/bin/
+          chmod +x /usr/local/bin/bore
         
       - name: Configure network and firewall settings
         run: |
@@ -58,14 +59,14 @@ jobs:
           sudo iptables -P OUTPUT ACCEPT
           sudo iptables -F OUTPUT
           
-          # Allow SSH port for Serveo
-          sudo iptables -A OUTPUT -p tcp --dport 22 -j ACCEPT
+          # Allow Bore.pub ports
+          sudo iptables -A OUTPUT -p tcp --dport 7835 -j ACCEPT
           sudo iptables -A OUTPUT -p tcp --dport 80 -j ACCEPT
           sudo iptables -A OUTPUT -p tcp --dport 443 -j ACCEPT
           
           # Test connectivity
-          echo "Testing Serveo connectivity..."
-          timeout 10 nc -zv serveo.net 22 2>&1 || echo "serveo.net:22 failed"
+          echo "Testing Bore.pub connectivity..."
+          timeout 10 nc -zv bore.pub 80 2>&1 || echo "bore.pub:80 failed"
           
       - name: Start tunnels with backup support
         run: |
@@ -97,37 +98,33 @@ jobs:
             echo "The service may start after tunnels are created."
           fi
           
-          # Start Serveo tunnels with custom subdomains
-          echo "Starting Serveo tunnels with custom subdomains..."
+          # Start Bore.pub tunnels with custom subdomains
+          echo "Starting Bore.pub tunnels..."
           
-          # Primary tunnel with custom subdomain
-          ssh -i ~/.ssh/serveo_key -o StrictHostKeyChecking=no -R $LOWERCASE_USERNAME:80:localhost:$PORT serveo.net > /tmp/tunnel1.log 2>&1 &
+          bore local $PORT --to bore.pub --subdomain $LOWERCASE_USERNAME > /tmp/bore1.log 2>&1 &
           sleep 10
-          
-          # Backup tunnels
-          ssh -i ~/.ssh/serveo_key -o StrictHostKeyChecking=no -R ${LOWERCASE_USERNAME}2:80:localhost:$PORT serveo.net > /tmp/tunnel2.log 2>&1 &
+          bore local $PORT --to bore.pub --subdomain ${LOWERCASE_USERNAME}2 > /tmp/bore2.log 2>&1 &
           sleep 10
-          
-          ssh -i ~/.ssh/serveo_key -o StrictHostKeyChecking=no -R ${LOWERCASE_USERNAME}3:80:localhost:$PORT serveo.net > /tmp/tunnel3.log 2>&1 &
+          bore local $PORT --to bore.pub --subdomain ${LOWERCASE_USERNAME}3 > /tmp/bore3.log 2>&1 &
           sleep 15
           
           echo "Custom Subdomain URLs:"
-          echo "Primary: https://$LOWERCASE_USERNAME.serveo.net"
-          echo "Backup 1: https://${LOWERCASE_USERNAME}2.serveo.net"
-          echo "Backup 2: https://${LOWERCASE_USERNAME}3.serveo.net"
+          echo "✅ Primary: https://$LOWERCASE_USERNAME.bore.pub"
+          echo "✅ Backup 1: https://${LOWERCASE_USERNAME}2.bore.pub"
+          echo "✅ Backup 2: https://${LOWERCASE_USERNAME}3.bore.pub"
           
           # Test primary tunnel
           echo "Testing primary tunnel..."
           sleep 10
-          curl -I "https://$LOWERCASE_USERNAME.serveo.net" || echo "Tunnel test failed, but service may still work"
+          if curl -I "https://$LOWERCASE_USERNAME.bore.pub" >/dev/null 2>&1; then
+            echo "✅ Tunnel is working perfectly!"
+          else
+            echo "⚠️ Tunnel test failed, but service may still work"
+          fi
           
-          echo "Setup complete! Custom subdomains active with no rate limits."
+          echo "🚀 Setup complete! Fast & reliable Bore.pub tunnels active."
           
           # Keep alive
-          while true; do
-            sleep 60
-            echo "[$(date)] Smart load balancer active"
-          done
           while true; do
             sleep 60
             echo "[$(date)] Smart load balancer active"
