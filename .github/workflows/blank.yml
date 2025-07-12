@@ -16,7 +16,6 @@ jobs:
       PORT: 7860
       IMAGE_NAME: bharanidharan/galaxykick
       IMAGE_TAG: v208
-      #209
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
@@ -52,20 +51,19 @@ jobs:
         
       - name: Configure network and firewall settings
         run: |
-          # Allow all outbound connections (GitHub Actions specific)
+          # Allow all outbound connections
           sudo iptables -P OUTPUT ACCEPT
           sudo iptables -F OUTPUT
           
-          # Allow specific tunnel server ports
+          # Allow full port range for localtunnel (30000-40000)
+          sudo iptables -A OUTPUT -p tcp --dport 30000:40000 -j ACCEPT
           sudo iptables -A OUTPUT -p tcp --dport 80 -j ACCEPT
           sudo iptables -A OUTPUT -p tcp --dport 443 -j ACCEPT
-          sudo iptables -A OUTPUT -p tcp --dport 7153 -j ACCEPT
-          sudo iptables -A OUTPUT -p tcp --dport 35729 -j ACCEPT
           
-          # Test tunnel server connectivity
+          # Test connectivity
           echo "Testing tunnel server connectivity..."
-          nc -zv loca.lt 80 2>&1 || echo "Port 80 test failed"
-          nc -zv loca.lt 443 2>&1 || echo "Port 443 test failed"
+          timeout 10 nc -zv localtunnel.me 80 2>&1 || echo "localtunnel.me:80 failed"
+          timeout 10 nc -zv loca.lt 80 2>&1 || echo "loca.lt:80 failed"
           
       - name: Start tunnels with backup support
         run: |
@@ -73,27 +71,39 @@ jobs:
           echo "Waiting for Docker container..."
           sleep 15
           
-          # Start main tunnel
-          echo "Starting main tunnel..."
-          lt --port $PORT --subdomain $LOWERCASE_USERNAME &
+          # Function to start tunnel with retry
+          start_tunnel() {
+            local subdomain=$1
+            local max_retries=3
+            local retry=0
+            
+            while [ $retry -lt $max_retries ]; do
+              echo "Starting tunnel for $subdomain (attempt $((retry+1)))..."
+              timeout 30 lt --port $PORT --subdomain $subdomain &
+              local pid=$!
+              sleep 10
+              
+              if kill -0 $pid 2>/dev/null; then
+                echo "Tunnel $subdomain started successfully"
+                return 0
+              else
+                echo "Tunnel $subdomain failed, retrying..."
+                retry=$((retry+1))
+                sleep 5
+              fi
+            done
+            echo "Failed to start tunnel $subdomain after $max_retries attempts"
+            return 1
+          }
           
-          # Start backup tunnels
-          echo "Starting backup tunnels..."
-          lt --port $PORT --subdomain ${LOWERCASE_USERNAME}2 &
-          lt --port $PORT --subdomain ${LOWERCASE_USERNAME}3 &
-          
-          sleep 15
+          # Start tunnels
+          start_tunnel $LOWERCASE_USERNAME
+          start_tunnel ${LOWERCASE_USERNAME}2
+          start_tunnel ${LOWERCASE_USERNAME}3
           
           echo "Setup complete:"
-          echo "Main URL: https://$LOWERCASE_USERNAME.loca.lt"
-          echo "Backup URLs (for backend failover):"
-          echo "  - https://${LOWERCASE_USERNAME}2.loca.lt"
-          echo "  - https://${LOWERCASE_USERNAME}3.loca.lt"
-          echo ""
-          echo "All tunnels point to Docker service on port $PORT"
-          echo "Backend will handle failover automatically"
-          
-
+          echo "URLs: https://$LOWERCASE_USERNAME.loca.lt"
+          echo "Backup: https://${LOWERCASE_USERNAME}2.loca.lt, https://${LOWERCASE_USERNAME}3.loca.lt"
           
           # Keep alive
           while true; do
