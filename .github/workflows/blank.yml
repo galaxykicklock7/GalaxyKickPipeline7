@@ -95,47 +95,37 @@ jobs:
             echo "The service may start after tunnels are created."
           fi
           
-          # Function to start tunnel with retry
-          start_tunnel() {
-            local subdomain=$1
-            local max_retries=3
-            local retry=0
-            
-            while [ $retry -lt $max_retries ]; do
-              echo "Starting tunnel for $subdomain (attempt $((retry+1)))..."
-              lt --port $PORT --subdomain $subdomain > /tmp/tunnel_${subdomain}.log 2>&1 &
-              local pid=$!
-              sleep 15
-              
-              if kill -0 $pid 2>/dev/null; then
-                echo "Tunnel $subdomain started (PID: $pid)"
-                # Test tunnel
-                sleep 5
-                if timeout 10 curl -f https://${subdomain}.loca.lt >/dev/null 2>&1; then
-                  echo "Tunnel $subdomain is working!"
-                  return 0
-                else
-                  echo "Tunnel $subdomain not responding, checking logs:"
-                  cat /tmp/tunnel_${subdomain}.log
-                fi
-              else
-                echo "Tunnel $subdomain process died, retrying..."
-              fi
-              retry=$((retry+1))
-              sleep 5
-            done
-            echo "Failed to start tunnel $subdomain after $max_retries attempts"
-            return 1
-          }
+          # Start tunnels (they work even if subdomain is taken)
+          echo "Starting tunnels..."
           
-          # Start tunnels
-          start_tunnel $LOWERCASE_USERNAME
-          start_tunnel ${LOWERCASE_USERNAME}2
-          start_tunnel ${LOWERCASE_USERNAME}3
+          lt --port $PORT --subdomain $LOWERCASE_USERNAME > /tmp/tunnel1.log 2>&1 &
+          sleep 5
+          lt --port $PORT --subdomain ${LOWERCASE_USERNAME}2 > /tmp/tunnel2.log 2>&1 &
+          sleep 5
+          lt --port $PORT --subdomain ${LOWERCASE_USERNAME}3 > /tmp/tunnel3.log 2>&1 &
+          sleep 10
           
-          echo "Setup complete:"
-          echo "URLs: https://$LOWERCASE_USERNAME.loca.lt"
-          echo "Backup: https://${LOWERCASE_USERNAME}2.loca.lt, https://${LOWERCASE_USERNAME}3.loca.lt"
+          echo "Tunnel URLs:"
+          grep "your url is:" /tmp/tunnel1.log || echo "Tunnel 1: Check logs"
+          grep "your url is:" /tmp/tunnel2.log || echo "Tunnel 2: Check logs"
+          grep "your url is:" /tmp/tunnel3.log || echo "Tunnel 3: Check logs"
+          
+          # Wait for service to be ready
+          echo "Waiting for service to be fully ready..."
+          sleep 30
+          
+          # Test one of the tunnel URLs
+          TUNNEL_URL=$(grep "your url is:" /tmp/tunnel1.log | cut -d' ' -f4)
+          if [ ! -z "$TUNNEL_URL" ]; then
+            echo "Testing tunnel: $TUNNEL_URL"
+            curl -I "$TUNNEL_URL" || echo "Tunnel test failed, but service may still work"
+          fi
+          
+          echo "Setup complete! Check tunnel logs above for actual URLs."
+          echo "Requested URLs (may be different if subdomain taken):"
+          echo "- https://$LOWERCASE_USERNAME.loca.lt"
+          echo "- https://${LOWERCASE_USERNAME}2.loca.lt"
+          echo "- https://${LOWERCASE_USERNAME}3.loca.lt"
           
           # Keep alive
           while true; do
