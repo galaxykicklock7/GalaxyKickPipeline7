@@ -46,8 +46,10 @@ jobs:
         with:
           node-version: '16'
           
-      - name: Install lt
-        run: npm install -g localtunnel
+      - name: Install Cloudflare Tunnel
+        run: |
+          wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
+          sudo dpkg -i cloudflared-linux-amd64.deb
         
       - name: Configure network and firewall settings
         run: |
@@ -61,9 +63,8 @@ jobs:
           sudo iptables -A OUTPUT -p tcp --dport 443 -j ACCEPT
           
           # Test connectivity
-          echo "Testing tunnel server connectivity..."
-          timeout 10 nc -zv localtunnel.me 80 2>&1 || echo "localtunnel.me:80 failed"
-          timeout 10 nc -zv loca.lt 80 2>&1 || echo "loca.lt:80 failed"
+          echo "Testing Cloudflare connectivity..."
+          timeout 10 nc -zv one.one.one.one 80 2>&1 || echo "Cloudflare connectivity failed"
           
       - name: Start tunnels with backup support
         run: |
@@ -95,37 +96,42 @@ jobs:
             echo "The service may start after tunnels are created."
           fi
           
-          # Start tunnels (they work even if subdomain is taken)
-          echo "Starting tunnels..."
+          # Start Cloudflare tunnels (no rate limits)
+          echo "Starting Cloudflare tunnels..."
           
-          lt --port $PORT --subdomain $LOWERCASE_USERNAME > /tmp/tunnel1.log 2>&1 &
-          sleep 5
-          lt --port $PORT --subdomain ${LOWERCASE_USERNAME}2 > /tmp/tunnel2.log 2>&1 &
-          sleep 5
-          lt --port $PORT --subdomain ${LOWERCASE_USERNAME}3 > /tmp/tunnel3.log 2>&1 &
+          cloudflared tunnel --url http://localhost:$PORT > /tmp/tunnel1.log 2>&1 &
           sleep 10
+          cloudflared tunnel --url http://localhost:$PORT > /tmp/tunnel2.log 2>&1 &
+          sleep 10
+          cloudflared tunnel --url http://localhost:$PORT > /tmp/tunnel3.log 2>&1 &
+          sleep 15
           
           echo "Tunnel URLs:"
-          grep "your url is:" /tmp/tunnel1.log || echo "Tunnel 1: Check logs"
-          grep "your url is:" /tmp/tunnel2.log || echo "Tunnel 2: Check logs"
-          grep "your url is:" /tmp/tunnel3.log || echo "Tunnel 3: Check logs"
+          grep -o 'https://[^[:space:]]*\.trycloudflare\.com' /tmp/tunnel1.log | head -1 || echo "Tunnel 1: Starting..."
+          grep -o 'https://[^[:space:]]*\.trycloudflare\.com' /tmp/tunnel2.log | head -1 || echo "Tunnel 2: Starting..."
+          grep -o 'https://[^[:space:]]*\.trycloudflare\.com' /tmp/tunnel3.log | head -1 || echo "Tunnel 3: Starting..."
           
-          # Wait for service to be ready
-          echo "Waiting for service to be fully ready..."
-          sleep 30
+          # Wait for tunnels to stabilize
+          echo "Waiting for tunnels to stabilize..."
+          sleep 20
           
-          # Test one of the tunnel URLs
-          TUNNEL_URL=$(grep "your url is:" /tmp/tunnel1.log | cut -d' ' -f4)
-          if [ ! -z "$TUNNEL_URL" ]; then
-            echo "Testing tunnel: $TUNNEL_URL"
-            curl -I "$TUNNEL_URL" || echo "Tunnel test failed, but service may still work"
+          # Show final URLs
+          echo "Final Tunnel URLs:"
+          TUNNEL1=$(grep -o 'https://[^[:space:]]*\.trycloudflare\.com' /tmp/tunnel1.log | head -1)
+          TUNNEL2=$(grep -o 'https://[^[:space:]]*\.trycloudflare\.com' /tmp/tunnel2.log | head -1)
+          TUNNEL3=$(grep -o 'https://[^[:space:]]*\.trycloudflare\.com' /tmp/tunnel3.log | head -1)
+          
+          echo "Primary: $TUNNEL1"
+          echo "Backup 1: $TUNNEL2"
+          echo "Backup 2: $TUNNEL3"
+          
+          # Test one tunnel
+          if [ ! -z "$TUNNEL1" ]; then
+            echo "Testing primary tunnel..."
+            curl -I "$TUNNEL1" || echo "Tunnel test failed, but service may still work"
           fi
           
-          echo "Setup complete! Check tunnel logs above for actual URLs."
-          echo "Requested URLs (may be different if subdomain taken):"
-          echo "- https://$LOWERCASE_USERNAME.loca.lt"
-          echo "- https://${LOWERCASE_USERNAME}2.loca.lt"
-          echo "- https://${LOWERCASE_USERNAME}3.loca.lt"
+          echo "Setup complete! No rate limits with Cloudflare tunnels."
           
           # Keep alive
           while true; do
