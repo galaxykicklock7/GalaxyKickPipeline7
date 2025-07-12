@@ -46,8 +46,8 @@ jobs:
         with:
           node-version: '16'
           
-      - name: Install instatunnel
-        run: npm install -g instatunnel
+      - name: Install lt
+        run: npm install -g localtunnel
         
       - name: Configure network and firewall settings
         run: |
@@ -55,14 +55,15 @@ jobs:
           sudo iptables -P OUTPUT ACCEPT
           sudo iptables -F OUTPUT
           
-          # Allow instatunnel ports
-          sudo iptables -A OUTPUT -p tcp --dport 8080 -j ACCEPT
+          # Allow full port range for localtunnel (30000-40000)
+          sudo iptables -A OUTPUT -p tcp --dport 30000:40000 -j ACCEPT
           sudo iptables -A OUTPUT -p tcp --dport 80 -j ACCEPT
           sudo iptables -A OUTPUT -p tcp --dport 443 -j ACCEPT
           
           # Test connectivity
-          echo "Testing instatunnel connectivity..."
-          timeout 10 nc -zv instatunnel.com 80 2>&1 || echo "instatunnel.com:80 failed"
+          echo "Testing tunnel server connectivity..."
+          timeout 10 nc -zv localtunnel.me 80 2>&1 || echo "localtunnel.me:80 failed"
+          timeout 10 nc -zv loca.lt 80 2>&1 || echo "loca.lt:80 failed"
           
       - name: Start tunnels with backup support
         run: |
@@ -94,37 +95,37 @@ jobs:
             echo "The service may start after tunnels are created."
           fi
           
-          # Start instatunnel with custom subdomains
-          echo "Starting instatunnel..."
+          # Start tunnels (they work even if subdomain is taken)
+          echo "Starting tunnels..."
           
-          instatunnel http $PORT --subdomain $LOWERCASE_USERNAME > /tmp/tunnel1.log 2>&1 &
+          lt --port $PORT --subdomain $LOWERCASE_USERNAME > /tmp/tunnel1.log 2>&1 &
+          sleep 5
+          lt --port $PORT --subdomain ${LOWERCASE_USERNAME}2 > /tmp/tunnel2.log 2>&1 &
+          sleep 5
+          lt --port $PORT --subdomain ${LOWERCASE_USERNAME}3 > /tmp/tunnel3.log 2>&1 &
           sleep 10
-          instatunnel http $PORT --subdomain ${LOWERCASE_USERNAME}2 > /tmp/tunnel2.log 2>&1 &
-          sleep 10
-          instatunnel http $PORT --subdomain ${LOWERCASE_USERNAME}3 > /tmp/tunnel3.log 2>&1 &
-          sleep 15
           
-          echo "Custom Subdomain URLs:"
-          echo "🚀 Primary: https://$LOWERCASE_USERNAME.instatunnel.com"
-          echo "🚀 Backup 1: https://${LOWERCASE_USERNAME}2.instatunnel.com"
-          echo "🚀 Backup 2: https://${LOWERCASE_USERNAME}3.instatunnel.com"
+          echo "Tunnel URLs:"
+          grep "your url is:" /tmp/tunnel1.log || echo "Tunnel 1: Check logs"
+          grep "your url is:" /tmp/tunnel2.log || echo "Tunnel 2: Check logs"
+          grep "your url is:" /tmp/tunnel3.log || echo "Tunnel 3: Check logs"
           
-          # Check tunnel logs
-          echo "Tunnel status:"
-          grep -i "tunnel\|url\|error" /tmp/tunnel1.log | head -3 || echo "Tunnel 1: Starting..."
-          grep -i "tunnel\|url\|error" /tmp/tunnel2.log | head -3 || echo "Tunnel 2: Starting..."
-          grep -i "tunnel\|url\|error" /tmp/tunnel3.log | head -3 || echo "Tunnel 3: Starting..."
+          # Wait for service to be ready
+          echo "Waiting for service to be fully ready..."
+          sleep 30
           
-          # Test primary tunnel
-          echo "Testing primary tunnel..."
-          sleep 10
-          if curl -I "https://$LOWERCASE_USERNAME.instatunnel.com" >/dev/null 2>&1; then
-            echo "✅ Instatunnel is working perfectly!"
-          else
-            echo "⚠️ Tunnel test failed, but service may still work"
+          # Test one of the tunnel URLs
+          TUNNEL_URL=$(grep "your url is:" /tmp/tunnel1.log | cut -d' ' -f4)
+          if [ ! -z "$TUNNEL_URL" ]; then
+            echo "Testing tunnel: $TUNNEL_URL"
+            curl -I "$TUNNEL_URL" || echo "Tunnel test failed, but service may still work"
           fi
           
-          echo "🎯 Setup complete! Instatunnel with custom subdomains active."
+          echo "Setup complete! Check tunnel logs above for actual URLs."
+          echo "Requested URLs (may be different if subdomain taken):"
+          echo "- https://$LOWERCASE_USERNAME.loca.lt"
+          echo "- https://${LOWERCASE_USERNAME}2.loca.lt"
+          echo "- https://${LOWERCASE_USERNAME}3.loca.lt"
           
           # Keep alive
           while true; do
