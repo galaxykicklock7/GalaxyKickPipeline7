@@ -39,6 +39,10 @@ jobs:
           docker run -d \
             --name galaxykick \
             -p $PORT:$PORT \
+            --health-cmd="curl -f http://localhost:$PORT || exit 1" \
+            --health-interval=10s \
+            --health-timeout=5s \
+            --health-retries=3 \
             $IMAGE_NAME:$IMAGE_TAG
             
       - name: Install Node.js
@@ -67,9 +71,26 @@ jobs:
           
       - name: Start tunnels with backup support
         run: |
-          # Wait for Docker container
-          echo "Waiting for Docker container..."
-          sleep 15
+          # Wait for Docker container to be healthy
+          echo "Waiting for Docker container to be ready..."
+          timeout=300
+          while [ $timeout -gt 0 ]; do
+            if docker ps --filter "name=galaxykick" --filter "health=healthy" | grep -q galaxykick; then
+              echo "Container is healthy!"
+              break
+            fi
+            echo "Container not ready yet, waiting..."
+            sleep 5
+            timeout=$((timeout-5))
+          done
+          
+          # Test local service
+          echo "Testing local service..."
+          curl -f http://localhost:$PORT || {
+            echo "Local service not responding, checking container logs:"
+            docker logs galaxykick
+            exit 1
+          }
           
           # Function to start tunnel with retry
           start_tunnel() {
@@ -79,18 +100,26 @@ jobs:
             
             while [ $retry -lt $max_retries ]; do
               echo "Starting tunnel for $subdomain (attempt $((retry+1)))..."
-              timeout 30 lt --port $PORT --subdomain $subdomain &
+              lt --port $PORT --subdomain $subdomain > /tmp/tunnel_${subdomain}.log 2>&1 &
               local pid=$!
-              sleep 10
+              sleep 15
               
               if kill -0 $pid 2>/dev/null; then
-                echo "Tunnel $subdomain started successfully"
-                return 0
-              else
-                echo "Tunnel $subdomain failed, retrying..."
-                retry=$((retry+1))
+                echo "Tunnel $subdomain started (PID: $pid)"
+                # Test tunnel
                 sleep 5
+                if timeout 10 curl -f https://${subdomain}.loca.lt >/dev/null 2>&1; then
+                  echo "Tunnel $subdomain is working!"
+                  return 0
+                else
+                  echo "Tunnel $subdomain not responding, checking logs:"
+                  cat /tmp/tunnel_${subdomain}.log
+                fi
+              else
+                echo "Tunnel $subdomain process died, retrying..."
               fi
+              retry=$((retry+1))
+              sleep 5
             done
             echo "Failed to start tunnel $subdomain after $max_retries attempts"
             return 1
