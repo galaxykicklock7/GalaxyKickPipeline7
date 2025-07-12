@@ -39,10 +39,6 @@ jobs:
           docker run -d \
             --name galaxykick \
             -p $PORT:$PORT \
-            --health-cmd="curl -f http://localhost:$PORT || exit 1" \
-            --health-interval=10s \
-            --health-timeout=5s \
-            --health-retries=3 \
             $IMAGE_NAME:$IMAGE_TAG
             
       - name: Install Node.js
@@ -71,26 +67,36 @@ jobs:
           
       - name: Start tunnels with backup support
         run: |
-          # Wait for Docker container to be healthy
+          # Wait for Docker container to be running
           echo "Waiting for Docker container to be ready..."
-          timeout=300
-          while [ $timeout -gt 0 ]; do
-            if docker ps --filter "name=galaxykick" --filter "health=healthy" | grep -q galaxykick; then
-              echo "Container is healthy!"
-              break
-            fi
-            echo "Container not ready yet, waiting..."
-            sleep 5
-            timeout=$((timeout-5))
-          done
+          sleep 30
+          
+          # Check container status
+          if ! docker ps | grep -q galaxykick; then
+            echo "Container not running, checking logs:"
+            docker logs galaxykick
+            exit 1
+          fi
           
           # Test local service
           echo "Testing local service..."
-          curl -f http://localhost:$PORT || {
-            echo "Local service not responding, checking container logs:"
+          for i in {1..10}; do
+            if curl -f http://localhost:$PORT >/dev/null 2>&1; then
+              echo "Service is responding!"
+              break
+            fi
+            echo "Attempt $i: Service not ready, waiting..."
+            sleep 10
+          done
+          
+          # Final check
+          if ! curl -f http://localhost:$PORT >/dev/null 2>&1; then
+            echo "Service still not responding after 100s, checking logs:"
             docker logs galaxykick
+            echo "Container processes:"
+            docker exec galaxykick ps aux || echo "Cannot exec into container"
             exit 1
-          }
+          fi
           
           # Function to start tunnel with retry
           start_tunnel() {
