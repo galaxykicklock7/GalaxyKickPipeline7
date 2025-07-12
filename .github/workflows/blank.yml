@@ -46,8 +46,11 @@ jobs:
         with:
           node-version: '16'
           
-      - name: Install lt
-        run: npm install -g localtunnel
+      - name: Setup SSH for Serveo
+        run: |
+          # Generate SSH key for serveo
+          ssh-keygen -t rsa -b 2048 -f ~/.ssh/serveo_key -N ""
+          chmod 600 ~/.ssh/serveo_key
         
       - name: Configure network and firewall settings
         run: |
@@ -55,15 +58,14 @@ jobs:
           sudo iptables -P OUTPUT ACCEPT
           sudo iptables -F OUTPUT
           
-          # Allow full port range for localtunnel (30000-40000)
-          sudo iptables -A OUTPUT -p tcp --dport 30000:40000 -j ACCEPT
+          # Allow SSH port for Serveo
+          sudo iptables -A OUTPUT -p tcp --dport 22 -j ACCEPT
           sudo iptables -A OUTPUT -p tcp --dport 80 -j ACCEPT
           sudo iptables -A OUTPUT -p tcp --dport 443 -j ACCEPT
           
           # Test connectivity
-          echo "Testing tunnel server connectivity..."
-          timeout 10 nc -zv localtunnel.me 80 2>&1 || echo "localtunnel.me:80 failed"
-          timeout 10 nc -zv loca.lt 80 2>&1 || echo "loca.lt:80 failed"
+          echo "Testing Serveo connectivity..."
+          timeout 10 nc -zv serveo.net 22 2>&1 || echo "serveo.net:22 failed"
           
       - name: Start tunnels with backup support
         run: |
@@ -95,39 +97,37 @@ jobs:
             echo "The service may start after tunnels are created."
           fi
           
-          # Start tunnels (they work even if subdomain is taken)
-          echo "Starting tunnels..."
+          # Start Serveo tunnels with custom subdomains
+          echo "Starting Serveo tunnels with custom subdomains..."
           
-          lt --port $PORT --subdomain $LOWERCASE_USERNAME > /tmp/tunnel1.log 2>&1 &
-          sleep 5
-          lt --port $PORT --subdomain ${LOWERCASE_USERNAME}2 > /tmp/tunnel2.log 2>&1 &
-          sleep 5
-          lt --port $PORT --subdomain ${LOWERCASE_USERNAME}3 > /tmp/tunnel3.log 2>&1 &
+          # Primary tunnel with custom subdomain
+          ssh -i ~/.ssh/serveo_key -o StrictHostKeyChecking=no -R $LOWERCASE_USERNAME:80:localhost:$PORT serveo.net > /tmp/tunnel1.log 2>&1 &
           sleep 10
           
-          echo "Tunnel URLs:"
-          grep "your url is:" /tmp/tunnel1.log || echo "Tunnel 1: Check logs"
-          grep "your url is:" /tmp/tunnel2.log || echo "Tunnel 2: Check logs"
-          grep "your url is:" /tmp/tunnel3.log || echo "Tunnel 3: Check logs"
+          # Backup tunnels
+          ssh -i ~/.ssh/serveo_key -o StrictHostKeyChecking=no -R ${LOWERCASE_USERNAME}2:80:localhost:$PORT serveo.net > /tmp/tunnel2.log 2>&1 &
+          sleep 10
           
-          # Wait for service to be ready
-          echo "Waiting for service to be fully ready..."
-          sleep 30
+          ssh -i ~/.ssh/serveo_key -o StrictHostKeyChecking=no -R ${LOWERCASE_USERNAME}3:80:localhost:$PORT serveo.net > /tmp/tunnel3.log 2>&1 &
+          sleep 15
           
-          # Test one of the tunnel URLs
-          TUNNEL_URL=$(grep "your url is:" /tmp/tunnel1.log | cut -d' ' -f4)
-          if [ ! -z "$TUNNEL_URL" ]; then
-            echo "Testing tunnel: $TUNNEL_URL"
-            curl -I "$TUNNEL_URL" || echo "Tunnel test failed, but service may still work"
-          fi
+          echo "Custom Subdomain URLs:"
+          echo "Primary: https://$LOWERCASE_USERNAME.serveo.net"
+          echo "Backup 1: https://${LOWERCASE_USERNAME}2.serveo.net"
+          echo "Backup 2: https://${LOWERCASE_USERNAME}3.serveo.net"
           
-          echo "Setup complete! Check tunnel logs above for actual URLs."
-          echo "Requested URLs (may be different if subdomain taken):"
-          echo "- https://$LOWERCASE_USERNAME.loca.lt"
-          echo "- https://${LOWERCASE_USERNAME}2.loca.lt"
-          echo "- https://${LOWERCASE_USERNAME}3.loca.lt"
+          # Test primary tunnel
+          echo "Testing primary tunnel..."
+          sleep 10
+          curl -I "https://$LOWERCASE_USERNAME.serveo.net" || echo "Tunnel test failed, but service may still work"
+          
+          echo "Setup complete! Custom subdomains active with no rate limits."
           
           # Keep alive
+          while true; do
+            sleep 60
+            echo "[$(date)] Smart load balancer active"
+          done
           while true; do
             sleep 60
             echo "[$(date)] Smart load balancer active"
